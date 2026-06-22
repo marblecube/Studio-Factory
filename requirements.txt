@@ -1,1 +1,1 @@
-# No pip dependencies yet — ffmpeg/ffprobe are system binaries called via subprocess
+tqdm>=4.66.0
