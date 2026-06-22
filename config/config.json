@@ -1,0 +1,9 @@
+{
+  "tools": {
+    "ffmpeg": "/usr/bin/ffmpeg",
+    "upscayl": "/home/vidal/upscayl-2.15.0-linux.AppImage"
+  },
+  "default_template": "templates/short_mythology",
+  "log_level": "INFO"
+}
+
