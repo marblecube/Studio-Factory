@@ -1,9 +1,0 @@
-{
-  "tools": {
-    "ffmpeg": "/usr/bin/ffmpeg",
-    "upscayl": "/usr/bin/upscayl-bin"
-  },
-  "default_template": "templates/short_mythology",
-  "log_level": "INFO"
-}
-
