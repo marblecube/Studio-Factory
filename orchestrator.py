@@ -18,7 +18,7 @@ def anchor(video_path, output_dir):
     
     print(f"⚓ Anchoring audio from {video_path.name}...")
     
-    cmd = [FFMPEG, "-i", str(video_path), "-vn", "-acodec", "pcm_s16le", str(output_audio)]
+    cmd = [FFMPEG, "-y", "-i", str(video_path), "-vn", "-acodec", "pcm_s16le", str(output_audio)]
     
     try:
         subprocess.run(cmd, check=True, capture_output=True)
@@ -27,6 +27,27 @@ def anchor(video_path, output_dir):
     except subprocess.CalledProcessError as e:
         print(f"❌ Audio extraction failed: {e.stderr.decode()}")
         return None
+
+def explode(video_path, project_folder):
+    """Explodes the video into individual PNG frames in a raw_frames folder."""
+    video_path = Path(video_path)
+    frames_dir = Path(project_folder) / "raw_frames"
+    frames_dir.mkdir(exist_ok=True)
+    
+    print(f"💥 Exploding {video_path.name} into frames...")
+    
+    # ffmpeg command to extract frames as pngs
+    cmd = [
+        FFMPEG, "-y", "-i", str(video_path), 
+        "-q:v", "2", 
+        str(frames_dir / "frame_%05d.png")
+    ]
+    
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        print(f"✅ Raw frames extracted to: {frames_dir}")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Frame extraction failed: {e.stderr.decode()}")
 
 def process_queue():
     input_dir = Path("input")
@@ -46,6 +67,7 @@ def process_queue():
         
         print(f"Processing: {video.name}")
         anchor(video, project_folder)
+        explode(video, project_folder)
 
 if __name__ == "__main__":
     process_queue()
