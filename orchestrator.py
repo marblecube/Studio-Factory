@@ -10,6 +10,48 @@ with open(config_path, 'r') as f:
     config = json.load(f)
 
 FFMPEG = config['tools']['ffmpeg']
+FFPROBE = config['tools'].get('ffprobe', 'ffprobe')  # Falls back to PATH if not in config
+
+def audit(video_path, project_folder):
+    """Logs source metadata and frame count for quality comparison."""
+    print(f"🔍 Auditing source: {video_path.name}")
+    
+    # 1. Get detailed stream/format metadata
+    cmd_meta = [
+        FFPROBE, "-v", "quiet", "-print_format", "json",
+        "-show_streams", "-show_format", str(video_path)
+    ]
+    
+    # 2. Get frame count
+    cmd_count = [
+        FFPROBE, "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=nb_frames", "-of", "default=nokey=1:noprint_wrappers=1",
+        str(video_path)
+    ]
+    
+    try:
+        # Get metadata
+        res_meta = subprocess.run(cmd_meta, capture_output=True, text=True)
+        metadata = json.loads(res_meta.stdout)
+        
+        # Get frame count
+        res_count = subprocess.run(cmd_count, capture_output=True, text=True)
+        frame_count = res_count.stdout.strip()
+        
+        # Save to audit_report.json
+        report_path = Path(project_folder) / "audit_report.json"
+        audit_data = {
+            "metadata": metadata,
+            "expected_frame_count": frame_count
+        }
+        
+        with open(report_path, "w") as f:
+            json.dump(audit_data, f, indent=4)
+            
+        print(f"✅ Audit report saved: {report_path} (Expected frames: {frame_count})")
+        
+    except Exception as e:
+        print(f"❌ Audit failed: {e}")
 
 def anchor(video_path, output_dir):
     """Extracts audio from the video and saves it to the output directory."""
@@ -66,6 +108,7 @@ def process_queue():
         project_folder.mkdir(exist_ok=True)
         
         print(f"Processing: {video.name}")
+        audit(video, project_folder)
         anchor(video, project_folder)
         explode(video, project_folder)
 
