@@ -2,9 +2,11 @@
   "tools": {
     "ffmpeg": "/usr/bin/ffmpeg",
     "ffprobe": "/usr/bin/ffprobe",
-    "upscayl": "/home/vidal/upscayl-2.15.0-linux.AppImage"
+    "upscayl_bin": "tools/upscayl/upscayl-bin",
+    "upscayl_models": "tools/upscayl/models"
   },
   "default_template": "templates/short_mythology",
+  "default_model": "upscayl-standard-4x",
+  "default_scale": 4,
   "log_level": "INFO"
 }
-

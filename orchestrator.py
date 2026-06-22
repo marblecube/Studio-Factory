@@ -11,6 +11,10 @@ with open(config_path, 'r') as f:
 
 FFMPEG = config['tools']['ffmpeg']
 FFPROBE = config['tools']['ffprobe']
+UPSCAYL_BIN = Path(config['tools']['upscayl_bin'])
+UPSCAYL_MODELS = Path(config['tools']['upscayl_models'])
+DEFAULT_MODEL = config.get('default_model', 'upscayl-standard-4x')
+DEFAULT_SCALE = config.get('default_scale', 4)
 
 
 def init_project(video_path):
@@ -182,12 +186,15 @@ def process_queue():
         project_root = Path("Projects") / video.stem
         manifest_path = project_root / "manifest.json"
 
-        # Smart skip: check if already verified
+        # Smart skip: check manifest status
         if manifest_path.exists():
             with open(manifest_path, 'r') as f:
                 manifest = json.load(f)
-            if manifest.get("status") == "verified":
-                print(f"⏩ Skipping {video.name}: Already processed and verified.")
+            if manifest.get("status") == "stitched":
+                # Pull the path directly from the manifest dictionary
+                output_path = manifest.get("output", "N/A")
+                print(f"⏩ Skipping {video.name}: Already fully processed.")
+                print(f"   ✨ Final render located at: {output_path}")
                 continue
 
         print(f"\n{'='*50}")
@@ -195,10 +202,169 @@ def process_queue():
         print(f"{'='*50}")
 
         project_root = init_project(video)
-        audit(video, project_root)
-        anchor(video, project_root)
-        explode(video, project_root)
-        verify(project_root)
+
+        # Read current status to resume where we left off
+        with open(project_root / "manifest.json", 'r') as f:
+            status = json.load(f).get("status", "initialized")
+
+        if status == "initialized":
+            audit(video, project_root)
+            status = "audited"
+
+        if status == "audited":
+            anchor(video, project_root)
+            explode(video, project_root)
+            verify(project_root)
+            status = "verified"
+
+        if status == "verified":
+            upscale(project_root)
+            sift(project_root)
+            verify_upscale(project_root)
+            status = "upscaled"
+
+        if status == "upscaled":
+            stitch(project_root)
+
+def upscale(project_root):
+    """Phase 4: Upscale raw frames using Upscayl CLI (headless)."""
+    input_dir = project_root / "process" / "frames_raw"
+    output_dir = project_root / "process" / "frames_upscaled"
+    output_dir.mkdir(exist_ok=True)
+
+    print(f"🚀 Upscaling frames with {DEFAULT_MODEL} @ {DEFAULT_SCALE}x...")
+
+    cmd = [
+        str(UPSCAYL_BIN),
+        "-i", str(input_dir),
+        "-o", str(output_dir),
+        "-m", str(UPSCAYL_MODELS),
+        "-n", DEFAULT_MODEL,
+        "-s", str(DEFAULT_SCALE),
+        "-f", "png"
+    ]
+
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    with tqdm(total=100, unit="%", desc="Upscaling") as pbar:
+        last_pct = 0
+        for line in process.stdout:
+            match = re.search(r"(\d+\.?\d*)%", line)
+            if match:
+                current_pct = int(float(match.group(1)))
+                if current_pct > last_pct:
+                    pbar.update(current_pct - last_pct)
+                    last_pct = current_pct
+
+    process.wait()
+
+    if process.returncode != 0:
+        print(f"❌ Upscale failed (exit code {process.returncode})")
+        raise subprocess.CalledProcessError(process.returncode, cmd)
+
+    print(f"✅ Upscale complete: {output_dir}")
+
+
+def sift(project_root):
+    """Phase 4b: Flattens nested subdirectories created by the upscale engine."""
+    upscaled_dir = project_root / "process" / "frames_upscaled"
+    moved = 0
+
+    for sub in list(upscaled_dir.iterdir()):
+        if sub.is_dir():
+            for img in sub.glob("*.png"):
+                dest = upscaled_dir / img.name
+                img.rename(dest)
+                moved += 1
+            sub.rmdir()
+
+    if moved > 0:
+        print(f"🧹 Sift: Flattened {moved} files from nested subdirectories.")
+    else:
+        print(f"🧹 Sift: Directory already flat — no action needed.")
+
+
+def verify_upscale(project_root):
+    """Verifies that the number of upscaled frames matches the raw count."""
+    manifest_path = project_root / "manifest.json"
+    upscaled_dir = project_root / "process" / "frames_upscaled"
+
+    with open(manifest_path, 'r') as f:
+        manifest = json.load(f)
+
+    raw_count = manifest['actual_frame_count']
+    upscaled_count = len(list(upscaled_dir.glob("*.png")))
+
+    if upscaled_count == raw_count:
+        print(f"✅ Upscale verified: {upscaled_count}/{raw_count} frames")
+        manifest['status'] = 'upscaled'
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=4)
+        return True
+    else:
+        print(f"❌ Upscale verification failed: Expected {raw_count}, got {upscaled_count}")
+        return False
+
+
+def stitch(project_root):
+    """Phase 5: Recombines upscaled frames + audio anchor into final render."""
+    manifest_path = project_root / "manifest.json"
+    frames_dir = project_root / "process" / "frames_upscaled"
+    audio_path = project_root / "metadata" / "audio_anchor.wav"
+    output_path = project_root / "export" / f"{project_root.name}_final_render.mp4"
+
+    with open(manifest_path, 'r') as f:
+        manifest = json.load(f)
+
+    fps = manifest["fps"]
+    expected_frames = manifest["actual_frame_count"]
+
+    print(f"🎬 Stitching {expected_frames} upscaled frames @ {fps} fps...")
+
+    cmd = [
+        FFMPEG, "-y",
+        "-framerate", fps,
+        "-i", str(frames_dir / "frame_%05d.png"),
+        "-i", str(audio_path),
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c:v", "libx264",
+        "-preset", "slow",
+        "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-shortest",
+        "-fflags", "+genpts",
+        "-progress", "pipe:1",
+        str(output_path)
+    ]
+
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    with tqdm(total=expected_frames, unit="frame", desc="Stitching") as pbar:
+        last_frame = 0
+        for line in process.stdout:
+            match = re.search(r"frame=(\d+)", line)
+            if match:
+                current_frame = int(match.group(1))
+                pbar.update(current_frame - last_frame)
+                last_frame = current_frame
+
+    process.wait()
+
+    if process.returncode != 0:
+        stderr = process.stderr.read()
+        print(f"❌ Stitch failed: {stderr}")
+        raise subprocess.CalledProcessError(process.returncode, cmd)
+
+    # Update manifest
+    manifest["status"] = "stitched"
+    manifest["output"] = str(output_path)
+    with open(manifest_path, 'w') as f:
+        json.dump(manifest, f, indent=4)
+
+    print(f"✅ Final render: {output_path}")
 
 
 if __name__ == "__main__":
