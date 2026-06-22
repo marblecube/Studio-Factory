@@ -1,8 +1,6 @@
 import json
 import subprocess
 from pathlib import Path
-import os
-import shutil
 
 # Load config
 config_path = Path("config/config.json")
@@ -10,7 +8,7 @@ with open(config_path, 'r') as f:
     config = json.load(f)
 
 FFMPEG = config['tools']['ffmpeg']
-FFPROBE = config['tools'].get('ffprobe', 'ffprobe')  # Falls back to PATH if not in config
+FFPROBE = config['tools']['ffprobe']
 
 def audit(video_path, project_folder):
     """Logs source metadata and frame count for quality comparison."""
@@ -80,8 +78,8 @@ def explode(video_path, project_folder):
     
     # ffmpeg command to extract frames as pngs
     cmd = [
-        FFMPEG, "-y", "-i", str(video_path), 
-        "-q:v", "2", 
+        FFMPEG, "-y", "-i", str(video_path),
+        "-pix_fmt", "rgb24",
         str(frames_dir / "frame_%05d.png")
     ]
     
@@ -107,6 +105,12 @@ def process_queue():
         project_folder = working_base / video.stem
         project_folder.mkdir(exist_ok=True)
         
+        # Smart Skip: Check if the audit report exists
+        audit_file = project_folder / "audit_report.json"
+        if audit_file.exists():
+            print(f"⏩ Skipping {video.name}: Already processed.")
+            continue
+            
         print(f"Processing: {video.name}")
         audit(video, project_folder)
         anchor(video, project_folder)
