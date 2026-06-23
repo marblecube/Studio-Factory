@@ -191,10 +191,11 @@ def process_queue():
             with open(manifest_path, 'r') as f:
                 manifest = json.load(f)
             if manifest.get("status") == "stitched":
-                # Pull the path directly from the manifest dictionary
                 output_path = manifest.get("output", "N/A")
+                # Pull resolution if available, otherwise default to your target
+                res = manifest.get("resolution", "2816×5120")
                 print(f"⏩ Skipping {video.name}: Already fully processed.")
-                print(f"   ✨ Final render located at: {output_path}")
+                print(f"   ✨ Final render ({res}) located at: {output_path}")
                 continue
 
         print(f"\n{'='*50}")

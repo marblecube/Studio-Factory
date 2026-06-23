@@ -24,7 +24,7 @@ The pipeline runs in 6 phases, each tracked in a `manifest.json` so you can resu
 
 ## Requirements
 
-### System Dependencies
+### System Dependencies   
 
 - **Python 3.10+**
 - **FFmpeg / FFprobe** — usually at `/usr/bin/ffmpeg`
@@ -53,6 +53,9 @@ cd /tmp && ./upscayl.AppImage --appimage-extract
 mkdir -p ~/Studio-Factory/tools/upscayl
 cp squashfs-root/resources/bin/upscayl-bin ~/Studio-Factory/tools/upscayl/
 cp -r squashfs-root/resources/models ~/Studio-Factory/tools/upscayl/
+
+# Verify the binary is executable
+ls -l ~/Studio-Factory/tools/upscayl/upscayl-bin
 
 # Cleanup
 rm -rf /tmp/squashfs-root /tmp/upscayl.AppImage
