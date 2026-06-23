@@ -354,8 +354,8 @@ def stitch(project_root, render_targets):
         else:
             label = "1080p"
             output_path = project_root / "export" / f"{project_root.name}_1080p_render.mp4"
-            # -2 preserves aspect ratio, rounds to nearest even number
-            scale_filter = ["-vf", "scale=-2:1080"]
+            # -2 preserves aspect ratio, lanczos for sharp downscale
+            scale_filter = ["-vf", "scale=-2:1080:flags=lanczos+accurate_rnd+full_chroma_inp"]
 
         print(f"\n🎬 Stitching {label}: {expected_frames} frames @ {fps} fps...")
 

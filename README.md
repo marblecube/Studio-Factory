@@ -132,6 +132,13 @@ Edit `config/config.json`:
 }
 ```
 
+## Credits
+
+Built with AI pair-programming:
+
+- **[Gemini 3.1 Flash-Lite](https://deepmind.google/technologies/gemini/)** — Design, architecture, and code generation
+- **[Claude Opus 4.6](https://www.anthropic.com/claude)** — Code review, debugging, and pipeline hardening
+
 ## License
 
 MIT
