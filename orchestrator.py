@@ -20,7 +20,7 @@ DEFAULT_SCALE = config.get('default_scale', 4)
 def init_project(video_path):
     """Phase 1: Initializes project structure and manifest.json."""
     project_root = Path("Projects") / video_path.stem
-    structure = ["source", "process/frames_raw", "export", "logs", "metadata"]
+    structure = ["process/frames_raw", "export", "logs", "metadata"]
 
     for sub in structure:
         (project_root / sub).mkdir(parents=True, exist_ok=True)
