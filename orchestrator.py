@@ -168,6 +168,27 @@ def verify(project_root):
         return False
 
 
+def strategy_selector():
+    """Prompts the user for render output resolution before processing."""
+    print("\n🎛️  Render Strategy")
+    print("=" * 40)
+    print("  [1] 5K   — Native upscaled resolution (archival/master)")
+    print("  [2] 1080p — Downscaled for YouTube delivery")
+    print("  [3] Both  — Render 5K master + 1080p delivery copy")
+    print("=" * 40)
+
+    while True:
+        choice = input("Select render strategy [1/2/3]: ").strip()
+        if choice == "1":
+            return ["5k"]
+        elif choice == "2":
+            return ["1080p"]
+        elif choice == "3":
+            return ["5k", "1080p"]
+        else:
+            print("  ⚠️  Invalid choice. Enter 1, 2, or 3.")
+
+
 def process_queue():
     """Scans input/ for videos and runs the full pipeline."""
     input_dir = Path("input")
@@ -182,6 +203,12 @@ def process_queue():
         print("No videos found in input/")
         return
 
+    # Prompt for render strategy once before processing
+    print(f"\n📋 Found {len(videos)} video(s) in input/:")
+    for v in videos:
+        print(f"   • {v.name}")
+    render_targets = strategy_selector()
+
     for video in videos:
         project_root = Path("Projects") / video.stem
         manifest_path = project_root / "manifest.json"
@@ -191,11 +218,10 @@ def process_queue():
             with open(manifest_path, 'r') as f:
                 manifest = json.load(f)
             if manifest.get("status") == "stitched":
-                output_path = manifest.get("output", "N/A")
-                # Pull resolution if available, otherwise default to your target
-                res = manifest.get("resolution", "2816×5120")
+                outputs = manifest.get("outputs", {})
                 print(f"⏩ Skipping {video.name}: Already fully processed.")
-                print(f"   ✨ Final render ({res}) located at: {output_path}")
+                for label, path in outputs.items():
+                    print(f"   ✨ {label} render → {path}")
                 continue
 
         print(f"\n{'='*50}")
@@ -225,7 +251,7 @@ def process_queue():
             status = "upscaled"
 
         if status == "upscaled":
-            stitch(project_root)
+            stitch(project_root, render_targets)
 
 def upscale(project_root):
     """Phase 4: Upscale raw frames using Upscayl CLI (headless)."""
