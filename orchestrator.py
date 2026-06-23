@@ -258,8 +258,13 @@ def upscale(project_root):
     input_dir = project_root / "process" / "frames_raw"
     output_dir = project_root / "process" / "frames_upscaled"
     output_dir.mkdir(exist_ok=True)
+    manifest_path = project_root / "manifest.json"
 
-    print(f"🚀 Upscaling frames with {DEFAULT_MODEL} @ {DEFAULT_SCALE}x...")
+    with open(manifest_path, 'r') as f:
+        manifest = json.load(f)
+    total_frames = manifest.get("actual_frame_count", 0)
+
+    print(f"🚀 Upscaling {total_frames} frames with {DEFAULT_MODEL} @ {DEFAULT_SCALE}x...")
 
     cmd = [
         str(UPSCAYL_BIN),
@@ -273,15 +278,14 @@ def upscale(project_root):
 
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
-    with tqdm(total=100, unit="%", desc="Upscaling") as pbar:
-        last_pct = 0
+    # upscayl-bin reports 0-100% per frame, so count completed frames
+    with tqdm(total=total_frames, unit="frame", desc="Upscaling") as pbar:
         for line in process.stdout:
             match = re.search(r"(\d+\.?\d*)%", line)
             if match:
-                current_pct = int(float(match.group(1)))
-                if current_pct > last_pct:
-                    pbar.update(current_pct - last_pct)
-                    last_pct = current_pct
+                pct = float(match.group(1))
+                if pct >= 100.0:
+                    pbar.update(1)
 
     process.wait()
 
