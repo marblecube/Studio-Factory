@@ -333,65 +333,119 @@ def verify_upscale(project_root):
         return False
 
 
-def stitch(project_root):
-    """Phase 5: Recombines upscaled frames + audio anchor into final render."""
+def stitch(project_root, render_targets):
+    """Phase 5: Recombines upscaled frames + audio anchor into final render(s)."""
     manifest_path = project_root / "manifest.json"
     frames_dir = project_root / "process" / "frames_upscaled"
     audio_path = project_root / "metadata" / "audio_anchor.wav"
-    output_path = project_root / "export" / f"{project_root.name}_final_render.mp4"
 
     with open(manifest_path, 'r') as f:
         manifest = json.load(f)
 
     fps = manifest["fps"]
     expected_frames = manifest["actual_frame_count"]
+    outputs = {}
 
-    print(f"🎬 Stitching {expected_frames} upscaled frames @ {fps} fps...")
+    for target in render_targets:
+        if target == "5k":
+            label = "5K"
+            output_path = project_root / "export" / f"{project_root.name}_5k_render.mp4"
+            scale_filter = []
+        else:
+            label = "1080p"
+            output_path = project_root / "export" / f"{project_root.name}_1080p_render.mp4"
+            # -2 preserves aspect ratio, rounds to nearest even number
+            scale_filter = ["-vf", "scale=-2:1080"]
 
-    cmd = [
-        FFMPEG, "-y",
-        "-framerate", fps,
-        "-i", str(frames_dir / "frame_%05d.png"),
-        "-i", str(audio_path),
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-c:v", "libx264",
-        "-preset", "slow",
-        "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-shortest",
-        "-fflags", "+genpts",
-        "-progress", "pipe:1",
-        str(output_path)
-    ]
+        print(f"\n🎬 Stitching {label}: {expected_frames} frames @ {fps} fps...")
 
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        cmd = [
+            FFMPEG, "-y",
+            "-framerate", fps,
+            "-i", str(frames_dir / "frame_%05d.png"),
+            "-i", str(audio_path),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+        ] + scale_filter + [
+            "-c:v", "libx264",
+            "-preset", "slow",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-shortest",
+            "-fflags", "+genpts",
+            "-progress", "pipe:1",
+            str(output_path)
+        ]
 
-    with tqdm(total=expected_frames, unit="frame", desc="Stitching") as pbar:
-        last_frame = 0
-        for line in process.stdout:
-            match = re.search(r"frame=(\d+)", line)
-            if match:
-                current_frame = int(match.group(1))
-                pbar.update(current_frame - last_frame)
-                last_frame = current_frame
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-    process.wait()
+        with tqdm(total=expected_frames, unit="frame", desc=f"Stitching {label}") as pbar:
+            last_frame = 0
+            for line in process.stdout:
+                match = re.search(r"frame=(\d+)", line)
+                if match:
+                    current_frame = int(match.group(1))
+                    pbar.update(current_frame - last_frame)
+                    last_frame = current_frame
 
-    if process.returncode != 0:
-        stderr = process.stderr.read()
-        print(f"❌ Stitch failed: {stderr}")
-        raise subprocess.CalledProcessError(process.returncode, cmd)
+        process.wait()
 
-    # Update manifest
+        if process.returncode != 0:
+            stderr = process.stderr.read()
+            print(f"❌ Stitch failed ({label}): {stderr}")
+            raise subprocess.CalledProcessError(process.returncode, cmd)
+
+        outputs[label] = str(output_path)
+        print(f"✅ {label} render: {output_path}")
+        quality_report(output_path)
+
+    # Update manifest with all outputs
     manifest["status"] = "stitched"
-    manifest["output"] = str(output_path)
+    manifest["outputs"] = outputs
     with open(manifest_path, 'w') as f:
         json.dump(manifest, f, indent=4)
 
-    print(f"✅ Final render: {output_path}")
+
+def quality_report(video_path):
+    """Runs ffprobe on a rendered file and prints the quality summary."""
+    cmd = [
+        FFPROBE, "-v", "error", "-hide_banner",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name,width,height,r_frame_rate,bit_rate",
+        "-of", "default=noprint_wrappers=1",
+        str(video_path)
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        fields = {}
+        for line in result.stdout.strip().split("\n"):
+            if "=" in line:
+                key, val = line.split("=", 1)
+                fields[key] = val
+
+        codec = fields.get("codec_name", "?")
+        width = fields.get("width", "?")
+        height = fields.get("height", "?")
+        fps = fields.get("r_frame_rate", "?")
+        bitrate_raw = fields.get("bit_rate", "0")
+
+        # Convert bitrate to Mbps for readability
+        try:
+            bitrate_mbps = f"{int(bitrate_raw) / 1_000_000:.1f} Mbps"
+        except (ValueError, TypeError):
+            bitrate_mbps = "N/A"
+
+        print(f"\n   📊 Quality Report: {video_path.name}")
+        print(f"   ├── Codec:      {codec}")
+        print(f"   ├── Resolution: {width}×{height}")
+        print(f"   ├── FPS:        {fps}")
+        print(f"   └── Bitrate:    {bitrate_mbps}")
+
+    except Exception as e:
+        print(f"   ⚠️  Quality report failed: {e}")
 
 
 if __name__ == "__main__":
