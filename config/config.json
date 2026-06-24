@@ -8,6 +8,7 @@
   "default_template": "templates/short_mythology",
   "default_model": "upscayl-standard-4x",
   "default_scale": 4,
+  "encode_crf": 18,
   "log_level": "INFO",
   "models": {
     "upscayl-standard-4x": "Standard — Balanced speed and quality. Good default.",

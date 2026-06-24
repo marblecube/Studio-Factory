@@ -21,7 +21,7 @@ def _make_config(tmp_path):
     }
 
 
-@patch("builtins.input", side_effect=["1"])
+@patch("builtins.input", side_effect=["1", ""])  # resolution=5k, crf=default
 def test_strategy_5k(mock_input, tmp_path):
     """Selecting '1' returns 5K resolution."""
     config = _make_config(tmp_path)
@@ -29,7 +29,7 @@ def test_strategy_5k(mock_input, tmp_path):
     assert profile.resolution == ["5k"]
 
 
-@patch("builtins.input", side_effect=["2"])
+@patch("builtins.input", side_effect=["2", ""])  # resolution=1080p, crf=default
 def test_strategy_1080p(mock_input, tmp_path):
     """Selecting '2' returns 1080p resolution."""
     config = _make_config(tmp_path)
@@ -37,7 +37,7 @@ def test_strategy_1080p(mock_input, tmp_path):
     assert profile.resolution == ["1080p"]
 
 
-@patch("builtins.input", side_effect=["3"])
+@patch("builtins.input", side_effect=["3", ""])  # resolution=both, crf=default
 def test_strategy_both(mock_input, tmp_path):
     """Selecting '3' returns both resolution targets."""
     config = _make_config(tmp_path)
@@ -45,7 +45,7 @@ def test_strategy_both(mock_input, tmp_path):
     assert profile.resolution == ["5k", "1080p"]
 
 
-@patch("builtins.input", side_effect=["x", "abc", "2"])
+@patch("builtins.input", side_effect=["x", "abc", "2", ""])  # invalid, invalid, resolution=1080p, crf=default
 def test_strategy_retries_on_invalid_input(mock_input, tmp_path):
     """Invalid inputs should prompt again until a valid choice is given."""
     config = _make_config(tmp_path)

@@ -33,8 +33,9 @@ _MODELS_DOWNLOAD_URL = "https://github.com/upscayl/upscayl/tree/main/models"
 class ProductionProfile:
     """Consolidated settings for a production run.
 
-    Carries resolution, model, retry, and packaging preferences
-    through the entire pipeline so functions don't need a dozen arguments.
+    Carries resolution, model, encoding quality, retry, and packaging
+    preferences through the entire pipeline so functions don't need a
+    dozen arguments.
     """
     resolution: list = field(default_factory=lambda: ["5k"])
     model: str = "upscayl-standard-4x"
@@ -42,6 +43,18 @@ class ProductionProfile:
     package_output: bool = False
     retry_limit: int = 3
     batch_mode: bool = False
+    encode_crf: int = 18
+
+
+# Encoding quality presets: (label, CRF, description)
+# CRF (Constant Rate Factor) controls the quality-vs-filesize trade-off.
+# Lower CRF = higher quality + larger file. Range: 0 (lossless) to 51 (worst).
+_ENCODE_PRESETS = [
+    ("Archive",    16, "Near-lossless. Best for long-term storage. Largest files."),
+    ("Production", 18, "Excellent quality. Recommended for most delivery work."),
+    ("Streaming",  23, "Good quality. Noticeably smaller files, suitable for web."),
+    ("Draft",      28, "Lower quality. Fast previews and review cuts only."),
+]
 
 
 def load_config(config_path=None):
@@ -187,6 +200,32 @@ def configure_production_run(config, video_count):
                 pass
             print(f"  ⚠️  Invalid choice. Enter a number from 1 to {len(installed)}.")
 
+    # --- Encoding Quality ---
+    print("\n🎚️  Encoding Quality (CRF):")
+    print("   CRF controls the trade-off between visual quality and file size.")
+    print("   Lower number = better quality, larger file.")
+    print("   Higher number = more compression, smaller file.")
+    print()
+    default_crf = config.get('encode_crf', 18)
+    default_preset_idx = 2  # Production (CRF 18) is the default
+    for i, (label, crf, desc) in enumerate(_ENCODE_PRESETS, 1):
+        marker = " ★" if crf == default_crf else ""
+        print(f"  [{i}] {label} (CRF {crf})  — {desc}{marker}")
+
+    while True:
+        raw = input(f"\n  Select quality [1-{len(_ENCODE_PRESETS)}] (default: {default_preset_idx}): ").strip()
+        if raw == "":
+            encode_crf = _ENCODE_PRESETS[default_preset_idx - 1][1]
+            break
+        try:
+            idx = int(raw)
+            if 1 <= idx <= len(_ENCODE_PRESETS):
+                encode_crf = _ENCODE_PRESETS[idx - 1][1]
+                break
+        except ValueError:
+            pass
+        print(f"  ⚠️  Invalid choice. Enter a number from 1 to {len(_ENCODE_PRESETS)}.")
+
     # --- Packaging (batch only) ---
     if batch_mode:
         print(f"\n📦 Packaging ({video_count} clips detected):")
@@ -204,11 +243,13 @@ def configure_production_run(config, video_count):
         package_output=package_output,
         retry_limit=3,
         batch_mode=batch_mode,
+        encode_crf=encode_crf,
     )
 
     # Confirm selection
     print(f"\n  📐 Resolution: {', '.join(r.upper() for r in profile.resolution)}")
     print(f"  🤖 Model:      {profile.model} @ {profile.scale}x")
+    print(f"  🎚️  Quality:    CRF {profile.encode_crf}")
     if batch_mode:
         pkg_status = "Yes" if profile.package_output else "No"
         print(f"  📦 Archive:    {pkg_status}")

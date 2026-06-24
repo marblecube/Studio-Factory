@@ -319,6 +319,57 @@ def test_upscale_raises_after_all_retries_exhausted(tmp_path, mock_config):
 
 
 # ---------------------------------------------------------------------------
+# Encoding quality (CRF) passthrough
+# ---------------------------------------------------------------------------
+
+@patch("orchestrator.quality_gate", return_value=(True, {}))
+def test_stitch_uses_profile_crf(mock_qgate, tmp_path, mock_config):
+    """stitch() should pass profile.encode_crf to the ffmpeg -crf argument."""
+    project_root = tmp_path / "crf_test"
+    export_dir = project_root / "export"
+    frames_dir = project_root / "process" / "frames_upscaled"
+    metadata_dir = project_root / "metadata"
+    for d in [export_dir, frames_dir, metadata_dir]:
+        d.mkdir(parents=True)
+
+    (metadata_dir / "audio_anchor.wav").touch()
+
+    manifest = {
+        "name": "crf_test",
+        "status": "upscaled",
+        "fps": "24/1",
+        "actual_frame_count": 5,
+        "outputs": {}
+    }
+    (project_root / "manifest.json").write_text(json.dumps(manifest))
+
+    profile = _default_profile(resolution=["5k"], encode_crf=16)  # Archive quality
+
+    captured_cmd = []
+
+    with patch("orchestrator.subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout.__iter__ = lambda self: iter(["frame=5\n", "progress=end\n"])
+        mock_proc.stderr.read.return_value = ""
+        mock_proc.returncode = 0
+        mock_proc.wait.return_value = None
+
+        def capture_cmd(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return mock_proc
+
+        mock_popen.side_effect = capture_cmd
+
+        (export_dir / "crf_test_5k_render.mp4").touch()
+        orchestrator.stitch(project_root, profile, mock_config)
+
+    crf_idx = captured_cmd.index("-crf")
+    assert captured_cmd[crf_idx + 1] == "16", (
+        f"Expected CRF 16 from profile, got {captured_cmd[crf_idx + 1]}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Quality gate failure handling
 # ---------------------------------------------------------------------------
 

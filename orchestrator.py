@@ -398,7 +398,7 @@ def stitch(project_root, profile, config):
         ] + scale_filter + [
             "-c:v", "libx264",
             "-preset", "slow",
-            "-crf", "18",
+            "-crf", str(profile.encode_crf),
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-b:a", "192k",
