@@ -98,17 +98,20 @@ class TestEncodingQuality:
         profile = configure_production_run(config, video_count=1)
         assert profile.encode_crf == 18  # [2] = Production
 
-    @patch("builtins.input", side_effect=["1", ""])  # uses config default of 16
+    @patch("builtins.input", side_effect=["1", ""])  # resolution=5k, crf=Enter (should honor config default)
     def test_config_default_crf_respected(self, mock_input, tmp_path):
-        """Config encode_crf of 16 should make Archive the default selection."""
-        config = self._make_config(tmp_path, default_crf=16)
-        # With default_crf=16 in config, the ★ marker appears next to Archive.
-        # The prompt default_preset_idx is still 2 (Production), but the star
-        # is visual only — this test confirms the config value reaches the profile
-        # when explicitly selected with Enter (which picks preset idx=2, CRF 18).
-        # To test the config value itself flows in, we use explicit selection:
+        """Enter should select the preset matching encode_crf in config, not always CRF 18."""
+        config = self._make_config(tmp_path, default_crf=16)  # Archive
         profile = configure_production_run(config, video_count=1)
-        # Enter = default_preset_idx 2 = CRF 18 regardless of config star
+        # ★ and Enter must agree: both should point to Archive (CRF 16)
+        assert profile.encode_crf == 16
+
+    @patch("builtins.input", side_effect=["1", ""])  # resolution=5k, crf=Enter
+    def test_custom_crf_in_config_falls_back_to_production(self, mock_input, tmp_path):
+        """A non-preset encode_crf (e.g. 20) should fall back to preset index 2 (Production)."""
+        config = self._make_config(tmp_path, default_crf=20)  # not a named preset
+        profile = configure_production_run(config, video_count=1)
+        # No preset matches CRF 20, so fallback index 2 = Production (CRF 18)
         assert profile.encode_crf == 18
 
 

@@ -207,7 +207,12 @@ def configure_production_run(config, video_count):
     print("   Higher number = more compression, smaller file.")
     print()
     default_crf = config.get('encode_crf', 18)
-    default_preset_idx = 2  # Production (CRF 18) is the default
+    # Derive the default preset index from the config value so Enter-key and ★ stay in sync.
+    # Falls back to 2 (Production) if encode_crf is a custom value not in the preset list.
+    default_preset_idx = next(
+        (i for i, (_, crf, _) in enumerate(_ENCODE_PRESETS, 1) if crf == default_crf),
+        2,
+    )
     for i, (label, crf, desc) in enumerate(_ENCODE_PRESETS, 1):
         marker = " ★" if crf == default_crf else ""
         print(f"  [{i}] {label} (CRF {crf})  — {desc}{marker}")
