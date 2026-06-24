@@ -75,6 +75,18 @@ rm -rf /tmp/squashfs-root /tmp/upscayl.AppImage
 
 Change the model in `config/config.json` → `"default_model"`.
 
+### Render Strategy
+
+After scanning `input/`, the orchestrator prompts you to choose an output resolution:
+
+| Option | Output | Use Case |
+|--------|--------|----------|
+| **5K** | Native upscaled resolution (e.g. 2816×5120) | Archival / master copy |
+| **1080p** | Downscaled via lanczos filter | YouTube / delivery |
+| **Both** | 5K master + 1080p delivery copy | Full production workflow |
+
+The 5K resolution is the natural result of the 4x upscale (e.g. 1280p × 4 = 5120p). It is not a separate upscale model — all models listed above are 4x scalers.
+
 ## Usage
 
 ```bash
@@ -85,9 +97,15 @@ cp my_video.mp4 input/
 python3 orchestrator.py
 ```
 
-That's it. The orchestrator will process every video in `input/` and output the final render to `Projects/<video_name>/export/final_render.mp4`.
+The orchestrator will:
+1. **Fingerprint** each video (SHA-256) and check if it's already been processed
+2. **Skip** duplicates — even if the file has been renamed
+3. **Resume** interrupted projects from the last completed phase
+4. **Prompt** for render strategy (5K / 1080p / Both) before processing
 
-Re-running is safe — completed projects are automatically skipped.
+Outputs land in `Projects/<video_name>/export/`:
+- `<video_name>_5k_render.mp4`
+- `<video_name>_1080p_render.mp4`
 
 ## Project Structure
 
@@ -102,13 +120,13 @@ Studio-Factory/              ← Logic repo (version controlled)
 ├── templates/               ← Project directory templates
 └── Projects/                ← Output (one folder per video)
     └── <video_name>/
-        ├── manifest.json    ← Central metadata + state tracking
-        ├── source/
+        ├── manifest.json    ← Central metadata + state tracking + source hash
         ├── process/
         │   ├── frames_raw/      ← Extracted PNG frames
         │   └── frames_upscaled/ ← AI-upscaled PNG frames
         ├── export/
-        │   └── final_render.mp4 ← Final output
+        │   ├── <name>_5k_render.mp4   ← 5K master (if selected)
+        │   └── <name>_1080p_render.mp4 ← 1080p delivery (if selected)
         ├── logs/
         └── metadata/
             └── audio_anchor.wav ← Locked audio stream
@@ -144,13 +162,13 @@ All external tools (ffmpeg, ffprobe, upscayl) are mocked — no GPU or system de
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
-| `test_init.py` | 3 | Project directory creation, manifest, idempotency |
+| `test_init.py` | 4 | Project directory creation, manifest, idempotency, hash backfill |
 | `test_audit.py` | 3 | Manifest enrichment, ffprobe calls, failure handling |
 | `test_verify.py` | 4 | Pass/fail for raw and upscaled frame verification |
 | `test_sift.py` | 3 | Flattening nested dirs, no-op, multiple subdirs |
 | `test_strategy.py` | 4 | All render choices + invalid input retry |
 | `test_quality_report.py` | 3 | Output parsing, missing bitrate, exception handling |
-| `test_pipeline.py` | 5 | Full run, skip-stitched, resume logic, edge cases |
+| `test_pipeline.py` | 9 | Full run, duplicate detection, resume, legacy support, hash identity |
 
 ## Credits
 
