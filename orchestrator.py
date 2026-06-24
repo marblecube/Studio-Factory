@@ -1,4 +1,5 @@
 import json
+import hashlib
 import subprocess
 from pathlib import Path
 from tqdm import tqdm
@@ -28,6 +29,15 @@ def load_config(config_path=None):
     DEFAULT_SCALE = config.get('default_scale', 4)
 
 
+def hash_file(filepath, algorithm="sha256"):
+    """Computes a hash digest of a file for identity tracking."""
+    h = hashlib.new(algorithm)
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def init_project(video_path):
     """Phase 1: Initializes project structure and manifest.json."""
     project_root = Path("Projects") / video_path.stem
@@ -38,9 +48,24 @@ def init_project(video_path):
 
     manifest_path = project_root / "manifest.json"
     if not manifest_path.exists():
-        manifest = {"name": video_path.stem, "status": "initialized"}
+        source_hash = hash_file(video_path)
+        manifest = {
+            "name": video_path.stem,
+            "status": "initialized",
+            "source_file": str(video_path),
+            "source_hash": source_hash
+        }
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=4)
+    else:
+        # Backfill source_hash for legacy projects that lack it
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+        if "source_hash" not in manifest:
+            manifest["source_hash"] = hash_file(video_path)
+            manifest["source_file"] = str(video_path)
+            with open(manifest_path, 'w') as f:
+                json.dump(manifest, f, indent=4)
 
     print(f"📁 Project initialized: {project_root}")
     return project_root
@@ -200,6 +225,34 @@ def strategy_selector():
             print("  ⚠️  Invalid choice. Enter 1, 2, or 3.")
 
 
+def _build_project_registry():
+    """Scans all existing projects and builds a lookup of source_hash → project info.
+    
+    Returns a dict mapping source_hash to (project_name, status, outputs).
+    """
+    registry = {}
+    projects_dir = Path("Projects")
+    if not projects_dir.exists():
+        return registry
+
+    for manifest_path in projects_dir.glob("*/manifest.json"):
+        try:
+            with open(manifest_path, 'r') as f:
+                manifest = json.load(f)
+            source_hash = manifest.get("source_hash")
+            if source_hash:
+                registry[source_hash] = {
+                    "project": manifest_path.parent.name,
+                    "status": manifest.get("status", "unknown"),
+                    # Support both legacy "output" (singular) and current "outputs" (plural)
+                    "outputs": manifest.get("outputs") or manifest.get("output", {}),
+                }
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    return registry
+
+
 def process_queue():
     """Scans input/ for videos and runs the full pipeline."""
     input_dir = Path("input")
@@ -214,26 +267,46 @@ def process_queue():
         print("No videos found in input/")
         return
 
-    # Prompt for render strategy once before processing
+    # Build registry of all known processed files by hash
+    print("\n🔎 Scanning existing projects...")
+    registry = _build_project_registry()
+
+    # Pre-scan: hash each input video and classify as new, resumable, or done
+    pending = []   # Videos that need processing
+    skipped = []   # Videos already fully processed
+
     print(f"\n📋 Found {len(videos)} video(s) in input/:")
-    for v in videos:
-        print(f"   • {v.name}")
+    for video in videos:
+        video_hash = hash_file(video)
+        existing = registry.get(video_hash)
+
+        if existing and existing["status"] == "stitched":
+            skipped.append((video, existing))
+            outputs = existing["outputs"]
+            project_name = existing["project"]
+            print(f"   ⏩ {video.name} — already processed (project: {project_name})")
+            if isinstance(outputs, dict):
+                for label, path in outputs.items():
+                    print(f"      ✨ {label} → {path}")
+            elif isinstance(outputs, str):
+                print(f"      ✨ render → {outputs}")
+        elif existing:
+            pending.append(video)
+            print(f"   🔄 {video.name} — resuming from '{existing['status']}' (project: {existing['project']})")
+        else:
+            pending.append(video)
+            print(f"   🆕 {video.name} — new")
+
+    if not pending:
+        print("\n✅ All videos already processed. Nothing to do.")
+        return
+
+    print(f"\n📦 {len(pending)} video(s) to process, {len(skipped)} already done.")
     render_targets = strategy_selector()
 
-    for video in videos:
+    for video in pending:
         project_root = Path("Projects") / video.stem
         manifest_path = project_root / "manifest.json"
-
-        # Smart skip: check manifest status
-        if manifest_path.exists():
-            with open(manifest_path, 'r') as f:
-                manifest = json.load(f)
-            if manifest.get("status") == "stitched":
-                outputs = manifest.get("outputs", {})
-                print(f"⏩ Skipping {video.name}: Already fully processed.")
-                for label, path in outputs.items():
-                    print(f"   ✨ {label} render → {path}")
-                continue
 
         print(f"\n{'='*50}")
         print(f"📦 Processing: {video.name}")
