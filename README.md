@@ -132,6 +132,26 @@ Edit `config/config.json`:
 }
 ```
 
+## Testing
+
+Run the full test suite with:
+
+```bash
+pytest tests/ -v
+```
+
+All external tools (ffmpeg, ffprobe, upscayl) are mocked — no GPU or system dependencies needed to run tests.
+
+| Module | Tests | Coverage |
+|--------|-------|----------|
+| `test_init.py` | 3 | Project directory creation, manifest, idempotency |
+| `test_audit.py` | 3 | Manifest enrichment, ffprobe calls, failure handling |
+| `test_verify.py` | 4 | Pass/fail for raw and upscaled frame verification |
+| `test_sift.py` | 3 | Flattening nested dirs, no-op, multiple subdirs |
+| `test_strategy.py` | 4 | All render choices + invalid input retry |
+| `test_quality_report.py` | 3 | Output parsing, missing bitrate, exception handling |
+| `test_pipeline.py` | 5 | Full run, skip-stitched, resume logic, edge cases |
+
 ## Credits
 
 Built with AI pair-programming:

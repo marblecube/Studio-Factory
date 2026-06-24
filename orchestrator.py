@@ -4,17 +4,28 @@ from pathlib import Path
 from tqdm import tqdm
 import re
 
-# Load config
-config_path = Path("config/config.json")
-with open(config_path, 'r') as f:
-    config = json.load(f)
+# Module-level config (populated by load_config)
+FFMPEG = None
+FFPROBE = None
+UPSCAYL_BIN = None
+UPSCAYL_MODELS = None
+DEFAULT_MODEL = None
+DEFAULT_SCALE = None
 
-FFMPEG = config['tools']['ffmpeg']
-FFPROBE = config['tools']['ffprobe']
-UPSCAYL_BIN = Path(config['tools']['upscayl_bin'])
-UPSCAYL_MODELS = Path(config['tools']['upscayl_models'])
-DEFAULT_MODEL = config.get('default_model', 'upscayl-standard-4x')
-DEFAULT_SCALE = config.get('default_scale', 4)
+
+def load_config(config_path=None):
+    """Loads tool paths and defaults from config.json into module globals."""
+    global FFMPEG, FFPROBE, UPSCAYL_BIN, UPSCAYL_MODELS, DEFAULT_MODEL, DEFAULT_SCALE
+    if config_path is None:
+        config_path = Path("config/config.json")
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    FFMPEG = config['tools']['ffmpeg']
+    FFPROBE = config['tools']['ffprobe']
+    UPSCAYL_BIN = Path(config['tools']['upscayl_bin'])
+    UPSCAYL_MODELS = Path(config['tools']['upscayl_models'])
+    DEFAULT_MODEL = config.get('default_model', 'upscayl-standard-4x')
+    DEFAULT_SCALE = config.get('default_scale', 4)
 
 
 def init_project(video_path):
@@ -453,4 +464,5 @@ def quality_report(video_path):
 
 
 if __name__ == "__main__":
+    load_config()
     process_queue()
