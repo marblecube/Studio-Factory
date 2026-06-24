@@ -2,11 +2,17 @@
 import json
 import pytest
 from pathlib import Path
+from config_manager import ProductionProfile
 
 
 @pytest.fixture
 def mock_config(tmp_path):
-    """Creates a temporary config.json and loads it into orchestrator globals."""
+    """Creates a temporary config.json, loads it into both modules' globals,
+    and returns the config dict for direct use in tests.
+
+    Tests that call orchestrator.process_queue() directly should pass this
+    fixture's return value as the `config` argument to avoid filesystem access.
+    """
     import orchestrator
 
     config_data = {
@@ -17,12 +23,18 @@ def mock_config(tmp_path):
             "upscayl_models": "tools/upscayl/models"
         },
         "default_model": "upscayl-standard-4x",
-        "default_scale": 4
+        "default_scale": 4,
+        "quality_thresholds": {
+            "min_bitrate_mbps_5k": 8.0,
+            "min_bitrate_mbps_1080p": 2.0,
+            "min_file_size_mb": 1.0,
+        }
     }
 
     config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps(config_data))
     orchestrator.load_config(config_file)
+    orchestrator._sync_globals()
 
     yield config_data
 
@@ -33,6 +45,19 @@ def mock_config(tmp_path):
     orchestrator.UPSCAYL_MODELS = None
     orchestrator.DEFAULT_MODEL = None
     orchestrator.DEFAULT_SCALE = None
+
+
+@pytest.fixture
+def production_profile():
+    """Returns a default ProductionProfile for use in pipeline tests."""
+    return ProductionProfile(
+        resolution=["5k"],
+        model="upscayl-standard-4x",
+        scale=4,
+        package_output=False,
+        retry_limit=3,
+        batch_mode=False,
+    )
 
 
 @pytest.fixture
