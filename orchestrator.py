@@ -1,11 +1,21 @@
 import json
 import hashlib
 import subprocess
+import time
+import shutil
 from pathlib import Path
+from datetime import datetime
 from tqdm import tqdm
 import re
 
-# Module-level config (populated by load_config)
+from config_manager import (
+    ProductionProfile,
+    load_config,
+    configure_production_run,
+)
+from validator import pre_flight_report, quality_gate
+
+# Module-level config (populated by load_config via config_manager)
 FFMPEG = None
 FFPROBE = None
 UPSCAYL_BIN = None
@@ -14,19 +24,16 @@ DEFAULT_MODEL = None
 DEFAULT_SCALE = None
 
 
-def load_config(config_path=None):
-    """Loads tool paths and defaults from config.json into module globals."""
+def _sync_globals():
+    """Syncs module-level globals from config_manager after load_config()."""
     global FFMPEG, FFPROBE, UPSCAYL_BIN, UPSCAYL_MODELS, DEFAULT_MODEL, DEFAULT_SCALE
-    if config_path is None:
-        config_path = Path("config/config.json")
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-    FFMPEG = config['tools']['ffmpeg']
-    FFPROBE = config['tools']['ffprobe']
-    UPSCAYL_BIN = Path(config['tools']['upscayl_bin'])
-    UPSCAYL_MODELS = Path(config['tools']['upscayl_models'])
-    DEFAULT_MODEL = config.get('default_model', 'upscayl-standard-4x')
-    DEFAULT_SCALE = config.get('default_scale', 4)
+    import config_manager
+    FFMPEG = config_manager.FFMPEG
+    FFPROBE = config_manager.FFPROBE
+    UPSCAYL_BIN = config_manager.UPSCAYL_BIN
+    UPSCAYL_MODELS = config_manager.UPSCAYL_MODELS
+    DEFAULT_MODEL = config_manager.DEFAULT_MODEL
+    DEFAULT_SCALE = config_manager.DEFAULT_SCALE
 
 
 def hash_file(filepath, algorithm="sha256"):
@@ -204,27 +211,6 @@ def verify(project_root):
         return False
 
 
-def strategy_selector():
-    """Prompts the user for render output resolution before processing."""
-    print("\n🎛️  Render Strategy")
-    print("=" * 40)
-    print("  [1] 5K   — Native upscaled resolution (archival/master)")
-    print("  [2] 1080p — Downscaled for YouTube delivery")
-    print("  [3] Both  — Render 5K master + 1080p delivery copy")
-    print("=" * 40)
-
-    while True:
-        choice = input("Select render strategy [1/2/3]: ").strip()
-        if choice == "1":
-            return ["5k"]
-        elif choice == "2":
-            return ["1080p"]
-        elif choice == "3":
-            return ["5k", "1080p"]
-        else:
-            print("  ⚠️  Invalid choice. Enter 1, 2, or 3.")
-
-
 def _build_project_registry():
     """Scans all existing projects and builds a lookup of source_hash → project info.
     
@@ -253,92 +239,8 @@ def _build_project_registry():
     return registry
 
 
-def process_queue():
-    """Scans input/ for videos and runs the full pipeline."""
-    input_dir = Path("input")
-
-    if not input_dir.exists():
-        print("❌ No input/ directory found.")
-        return
-
-    videos = list(input_dir.glob("*.mp4")) + list(input_dir.glob("*.mkv"))
-
-    if not videos:
-        print("No videos found in input/")
-        return
-
-    # Build registry of all known processed files by hash
-    print("\n🔎 Scanning existing projects...")
-    registry = _build_project_registry()
-
-    # Pre-scan: hash each input video and classify as new, resumable, or done
-    pending = []   # Videos that need processing
-    skipped = []   # Videos already fully processed
-
-    print(f"\n📋 Found {len(videos)} video(s) in input/:")
-    for video in videos:
-        video_hash = hash_file(video)
-        existing = registry.get(video_hash)
-
-        if existing and existing["status"] == "stitched":
-            skipped.append((video, existing))
-            outputs = existing["outputs"]
-            project_name = existing["project"]
-            print(f"   ⏩ {video.name} — already processed (project: {project_name})")
-            if isinstance(outputs, dict):
-                for label, path in outputs.items():
-                    print(f"      ✨ {label} → {path}")
-            elif isinstance(outputs, str):
-                print(f"      ✨ render → {outputs}")
-        elif existing:
-            pending.append(video)
-            print(f"   🔄 {video.name} — resuming from '{existing['status']}' (project: {existing['project']})")
-        else:
-            pending.append(video)
-            print(f"   🆕 {video.name} — new")
-
-    if not pending:
-        print("\n✅ All videos already processed. Nothing to do.")
-        return
-
-    print(f"\n📦 {len(pending)} video(s) to process, {len(skipped)} already done.")
-    render_targets = strategy_selector()
-
-    for video in pending:
-        project_root = Path("Projects") / video.stem
-        manifest_path = project_root / "manifest.json"
-
-        print(f"\n{'='*50}")
-        print(f"📦 Processing: {video.name}")
-        print(f"{'='*50}")
-
-        project_root = init_project(video)
-
-        # Read current status to resume where we left off
-        with open(project_root / "manifest.json", 'r') as f:
-            status = json.load(f).get("status", "initialized")
-
-        if status == "initialized":
-            audit(video, project_root)
-            status = "audited"
-
-        if status == "audited":
-            anchor(video, project_root)
-            explode(video, project_root)
-            verify(project_root)
-            status = "verified"
-
-        if status == "verified":
-            upscale(project_root)
-            sift(project_root)
-            verify_upscale(project_root)
-            status = "upscaled"
-
-        if status == "upscaled":
-            stitch(project_root, render_targets)
-
-def upscale(project_root):
-    """Phase 4: Upscale raw frames using Upscayl CLI (headless)."""
+def _run_upscale(project_root, model, scale):
+    """Internal: runs the upscayl-bin subprocess for a single upscale pass."""
     input_dir = project_root / "process" / "frames_raw"
     output_dir = project_root / "process" / "frames_upscaled"
     output_dir.mkdir(exist_ok=True)
@@ -348,15 +250,15 @@ def upscale(project_root):
         manifest = json.load(f)
     total_frames = manifest.get("actual_frame_count", 0)
 
-    print(f"🚀 Upscaling {total_frames} frames with {DEFAULT_MODEL} @ {DEFAULT_SCALE}x...")
+    print(f"🚀 Upscaling {total_frames} frames with {model} @ {scale}x...")
 
     cmd = [
         str(UPSCAYL_BIN),
         "-i", str(input_dir),
         "-o", str(output_dir),
         "-m", str(UPSCAYL_MODELS),
-        "-n", DEFAULT_MODEL,
-        "-s", str(DEFAULT_SCALE),
+        "-n", model,
+        "-s", str(scale),
         "-f", "png"
     ]
 
@@ -378,6 +280,31 @@ def upscale(project_root):
         raise subprocess.CalledProcessError(process.returncode, cmd)
 
     print(f"✅ Upscale complete: {output_dir}")
+
+
+def upscale(project_root, profile):
+    """Phase 4: Upscale raw frames with retry logic.
+
+    Wraps _run_upscale() with exponential backoff retry. On failure,
+    waits progressively longer (5s, 10s, 20s) before retrying.
+
+    Args:
+        project_root: Path to the project directory.
+        profile: ProductionProfile with model, scale, and retry_limit.
+    """
+    for attempt in range(1, profile.retry_limit + 1):
+        try:
+            _run_upscale(project_root, profile.model, profile.scale)
+            return
+        except subprocess.CalledProcessError:
+            if attempt < profile.retry_limit:
+                wait = 5 * (2 ** (attempt - 1))  # 5s, 10s, 20s
+                print(f"⚠️  Upscale attempt {attempt}/{profile.retry_limit} failed. "
+                      f"Retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                print(f"❌ Upscale failed after {profile.retry_limit} attempts.")
+                raise
 
 
 def sift(project_root):
@@ -421,8 +348,21 @@ def verify_upscale(project_root):
         return False
 
 
-def stitch(project_root, render_targets):
-    """Phase 5: Recombines upscaled frames + audio anchor into final render(s)."""
+def stitch(project_root, profile, config):
+    """Phase 5: Recombines upscaled frames + audio anchor into final render(s).
+
+    After each render, runs quality_gate() to enforce pass/fail thresholds.
+    If a render fails the quality gate, the manifest is marked 'failed_quality'
+    but the batch continues processing.
+
+    Args:
+        project_root: Path to the project directory.
+        profile: ProductionProfile with resolution targets.
+        config: Parsed config dict (passed to quality_gate for thresholds).
+
+    Returns:
+        bool: True if all renders passed quality gate, False if any failed.
+    """
     manifest_path = project_root / "manifest.json"
     frames_dir = project_root / "process" / "frames_upscaled"
     audio_path = project_root / "metadata" / "audio_anchor.wav"
@@ -433,8 +373,9 @@ def stitch(project_root, render_targets):
     fps = manifest["fps"]
     expected_frames = manifest["actual_frame_count"]
     outputs = {}
+    all_passed = True
 
-    for target in render_targets:
+    for target in profile.resolution:
         if target == "5k":
             label = "5K"
             output_path = project_root / "export" / f"{project_root.name}_5k_render.mp4"
@@ -487,55 +428,295 @@ def stitch(project_root, render_targets):
 
         outputs[label] = str(output_path)
         print(f"✅ {label} render: {output_path}")
-        quality_report(output_path)
 
-    # Update manifest with all outputs
-    manifest["status"] = "stitched"
+        # Quality gate — replaces quality_report()
+        passed, report = quality_gate(output_path, config, target_resolution=target)
+
+        if not passed:
+            all_passed = False
+            print(f"\n⚠️  {project_root.name} marked as FAILED_QUALITY — review output manually.")
+            print(f"   Render is preserved at: {output_path}")
+
+    # Update manifest
+    if all_passed:
+        manifest["status"] = "stitched"
+    else:
+        manifest["status"] = "failed_quality"
     manifest["outputs"] = outputs
     with open(manifest_path, 'w') as f:
         json.dump(manifest, f, indent=4)
 
+    return all_passed
 
-def quality_report(video_path):
-    """Runs ffprobe on a rendered file and prints the quality summary."""
-    cmd = [
-        FFPROBE, "-v", "error", "-hide_banner",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=codec_name,width,height,r_frame_rate,bit_rate",
-        "-of", "default=noprint_wrappers=1",
-        str(video_path)
-    ]
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        fields = {}
-        for line in result.stdout.strip().split("\n"):
-            if "=" in line:
-                key, val = line.split("=", 1)
-                fields[key] = val
+def package_delivery(completed_projects, batch_name=None):
+    """Collects all rendered exports and archives them into a 7z file.
 
-        codec = fields.get("codec_name", "?")
-        width = fields.get("width", "?")
-        height = fields.get("height", "?")
-        fps = fields.get("r_frame_rate", "?")
-        bitrate_raw = fields.get("bit_rate", "0")
+    Copies rendered files from individual Projects/*/export/ directories
+    into batch_exports/<batch_name>/ and compresses with py7zr.
 
-        # Convert bitrate to Mbps for readability
-        try:
-            bitrate_mbps = f"{int(bitrate_raw) / 1_000_000:.1f} Mbps"
-        except (ValueError, TypeError):
-            bitrate_mbps = "N/A"
+    Args:
+        completed_projects: List of project root Paths that have renders.
+        batch_name: Optional name for the archive (defaults to date-stamped).
 
-        print(f"\n   📊 Quality Report: {video_path.name}")
-        print(f"   ├── Codec:      {codec}")
-        print(f"   ├── Resolution: {width}×{height}")
-        print(f"   ├── FPS:        {fps}")
-        print(f"   └── Bitrate:    {bitrate_mbps}")
+    Returns:
+        Path to the created .7z archive, or None if no files to package.
+    """
+    import py7zr
 
-    except Exception as e:
-        print(f"   ⚠️  Quality report failed: {e}")
+    if batch_name is None:
+        batch_name = f"{datetime.now().strftime('%Y-%m-%d')}_batch"
+
+    batch_dir = Path("batch_exports") / batch_name
+    batch_dir.mkdir(parents=True, exist_ok=True)
+
+    collected = 0
+    print(f"\n📦 Packaging batch exports...")
+
+    for project_root in completed_projects:
+        export_dir = project_root / "export"
+        if not export_dir.exists():
+            continue
+        for render_file in export_dir.glob("*.mp4"):
+            dest = batch_dir / render_file.name
+            shutil.copy2(render_file, dest)
+            print(f"   Collecting {render_file.name}...")
+            collected += 1
+
+    if collected == 0:
+        print("   ⚠️  No renders found to package.")
+        return None
+
+    archive_path = Path("batch_exports") / f"{batch_name}.7z"
+    print(f"   Compressing {collected} render(s) → {archive_path}...")
+
+    with py7zr.SevenZipFile(str(archive_path), 'w') as archive:
+        for render_file in batch_dir.glob("*.mp4"):
+            archive.write(render_file, render_file.name)
+
+    # Report archive size
+    archive_size_mb = archive_path.stat().st_size / (1024 * 1024)
+    if archive_size_mb > 1024:
+        size_str = f"{archive_size_mb / 1024:.1f} GB"
+    else:
+        size_str = f"{archive_size_mb:.1f} MB"
+
+    print(f"   ✅ Archive complete: {size_str} → {archive_path}")
+
+    return archive_path
+
+
+def delivery_report(profile, results, elapsed_seconds):
+    """Prints a clear final summary of the completed workflow.
+
+    Args:
+        profile: ProductionProfile used for this run.
+        results: List of dicts with keys: name, status, outputs, project_root.
+        elapsed_seconds: Total wall-clock time for the run.
+    """
+    # Format elapsed time
+    hours = int(elapsed_seconds // 3600)
+    minutes = int((elapsed_seconds % 3600) // 60)
+    if hours > 0:
+        duration_str = f"{hours}h {minutes}m"
+    else:
+        duration_str = f"{minutes} minutes"
+
+    total = len(results)
+    successes = sum(1 for r in results if r["status"] == "stitched")
+    failures = sum(1 for r in results if r["status"] == "failed_quality")
+    failed_names = [r["name"] for r in results if r["status"] == "failed_quality"]
+
+    print(f"\n{'═' * 50}")
+
+    if profile.batch_mode:
+        print("✅ Batch Workflow Complete")
+        print(f"{'─' * 50}")
+        print(f"   Clips processed:   {successes}/{total}")
+        if failures > 0:
+            print(f"   Quality failures:  {failures} ({', '.join(failed_names)} — review manually)")
+        print(f"   Model:             {profile.model} @ {profile.scale}x")
+        print(f"   Resolution:        {', '.join(r.upper() for r in profile.resolution)}")
+
+        if profile.package_output:
+            # Archive path is printed by package_delivery() already
+            print(f"   📦 See batch_exports/ for archived delivery.")
+
+        # List each clip's output
+        print(f"\n   Outputs:")
+        for r in results:
+            status_icon = "✅" if r["status"] == "stitched" else "⚠️"
+            print(f"   {status_icon} {r['name']}:")
+            if isinstance(r.get("outputs"), dict):
+                for label, path in r["outputs"].items():
+                    print(f"      ✨ {label} → {path}")
+    else:
+        # Single clip
+        r = results[0] if results else {}
+        status_icon = "✅" if r.get("status") == "stitched" else "⚠️"
+        print(f"{status_icon} Workflow Complete")
+        print(f"{'─' * 50}")
+        print(f"   Clip:       {r.get('name', '?')}")
+        print(f"   Model:      {profile.model} @ {profile.scale}x")
+        print(f"   Resolution: {', '.join(r_.upper() for r_ in profile.resolution)}")
+        if isinstance(r.get("outputs"), dict):
+            print(f"   Renders:")
+            for label, path in r["outputs"].items():
+                print(f"     ✨ {label} → {path}")
+
+    print(f"   Duration:   {duration_str}")
+    print(f"{'═' * 50}\n")
+
+
+def process_queue(config=None):
+    """Scans input/ for videos and runs the full pipeline.
+
+    Orchestrates the complete flow: scan → pre-flight → approval →
+    configure → process → package → deliver.
+
+    Args:
+        config: Optional pre-loaded config dict. If None, loads from default path.
+    """
+    if config is None:
+        config = load_config()
+        _sync_globals()
+
+    input_dir = Path("input")
+
+    if not input_dir.exists():
+        print("❌ No input/ directory found.")
+        return
+
+    videos = list(input_dir.glob("*.mp4")) + list(input_dir.glob("*.mkv"))
+
+    if not videos:
+        print("No videos found in input/")
+        return
+
+    # Step 1: Build registry of all known processed files by hash
+    print("\n🔎 Scanning existing projects...")
+    registry = _build_project_registry()
+
+    # Step 2: Pre-scan — hash each input video and classify
+    pending = []   # Videos that need processing
+    skipped = []   # Videos already fully processed
+    resuming = []  # Videos with partial progress
+
+    print(f"\n📋 Found {len(videos)} video(s) in input/:")
+    for video in videos:
+        video_hash = hash_file(video)
+        existing = registry.get(video_hash)
+
+        if existing and existing["status"] == "stitched":
+            skipped.append((video, existing))
+            outputs = existing["outputs"]
+            project_name = existing["project"]
+            print(f"   ⏩ {video.name} — already processed (project: {project_name})")
+            if isinstance(outputs, dict):
+                for label, path in outputs.items():
+                    print(f"      ✨ {label} → {path}")
+            elif isinstance(outputs, str):
+                print(f"      ✨ render → {outputs}")
+        elif existing:
+            pending.append(video)
+            resuming.append(video.name)
+            print(f"   🔄 {video.name} — resuming from '{existing['status']}' "
+                  f"(project: {existing['project']})")
+        else:
+            pending.append(video)
+            print(f"   🆕 {video.name} — new")
+
+    if not pending:
+        print("\n✅ All videos already processed. Nothing to do.")
+        return
+
+    # Step 3: Summary
+    new_count = len(pending) - len(resuming)
+    print(f"\n📦 {len(pending)} video(s) to process "
+          f"({new_count} new, {len(resuming)} resuming), "
+          f"{len(skipped)} already done.")
+
+    # Step 4: Pre-flight check
+    print("\n🛫 Running pre-flight checks...")
+    preflight_ok = pre_flight_report(pending, config)
+
+    if not preflight_ok:
+        print("\n❌ Pre-flight check failed. Aborting to prevent disk space issues.")
+        print("   Free up space or reduce the batch size and try again.")
+        return
+
+    # Step 5: User approval for batch jobs
+    if len(pending) > 1:
+        confirm = input(f"\n   Proceed with {len(pending)} clips? [Y/n]: ").strip()
+        if confirm.lower() == 'n':
+            print("   Batch aborted by user.")
+            return
+
+    # Step 6: Configure production run
+    profile = configure_production_run(config, video_count=len(pending))
+
+    # Step 7: Processing loop
+    start_time = time.time()
+    results = []
+    completed_projects = []
+
+    for i, video in enumerate(pending, 1):
+        project_root = Path("Projects") / video.stem
+        manifest_path = project_root / "manifest.json"
+
+        print(f"\n{'='*50}")
+        print(f"📦 Processing clip {i}/{len(pending)}: {video.name}")
+        print(f"{'='*50}")
+
+        project_root = init_project(video)
+
+        # Read current status to resume where we left off
+        with open(project_root / "manifest.json", 'r') as f:
+            status = json.load(f).get("status", "initialized")
+
+        if status == "initialized":
+            audit(video, project_root)
+            status = "audited"
+
+        if status == "audited":
+            anchor(video, project_root)
+            explode(video, project_root)
+            verify(project_root)
+            status = "verified"
+
+        if status == "verified":
+            upscale(project_root, profile)
+            sift(project_root)
+            verify_upscale(project_root)
+            status = "upscaled"
+
+        if status == "upscaled":
+            all_passed = stitch(project_root, profile, config)
+
+            # Read final manifest for results
+            with open(project_root / "manifest.json", 'r') as f:
+                final_manifest = json.load(f)
+
+            results.append({
+                "name": video.stem,
+                "status": final_manifest.get("status", "unknown"),
+                "outputs": final_manifest.get("outputs", {}),
+                "project_root": project_root,
+            })
+
+            if final_manifest.get("status") == "stitched":
+                completed_projects.append(project_root)
+
+    # Step 8: Batch packaging
+    if profile.package_output and completed_projects:
+        package_delivery(completed_projects)
+
+    # Step 9: Delivery report
+    elapsed = time.time() - start_time
+    delivery_report(profile, results, elapsed)
 
 
 if __name__ == "__main__":
-    load_config()
-    process_queue()
+    config = load_config()
+    _sync_globals()
+    process_queue(config)
