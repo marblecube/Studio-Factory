@@ -8,5 +8,19 @@
   "default_template": "templates/short_mythology",
   "default_model": "upscayl-standard-4x",
   "default_scale": 4,
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "models": {
+    "upscayl-standard-4x": "Standard — Balanced speed and quality. Good default.",
+    "ultrasharp-4x": "UltraSharp — Maximum detail. Best for live-action footage.",
+    "ultramix-balanced-4x": "UltraMix — Balanced sharpness/smoothness. Versatile.",
+    "remacri-4x": "Remacri — Smooth, natural look. Good for portraits.",
+    "digital-art-4x": "Digital Art — Optimized for illustrations and digital art.",
+    "high-fidelity-4x": "High Fidelity — Faithful reproduction with minimal artifacts.",
+    "upscayl-lite-4x": "Lite — Fastest. Lower quality, good for previews/drafts."
+  },
+  "quality_thresholds": {
+    "min_bitrate_mbps_1080p": 2.0,
+    "min_bitrate_mbps_5k": 8.0,
+    "min_file_size_mb": 1.0
+  }
 }
