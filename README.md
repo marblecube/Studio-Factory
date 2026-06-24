@@ -108,9 +108,28 @@ python3 orchestrator.py
 
 🎛️  Production Profile
 ══════════════════════════════════════════
-📐 Resolution:   [1] 5K  [2] 1080p  [3] Both
-🤖 Model:        [1] UltraSharp ★  [2] Standard  ...
-📦 Packaging:    Archive to batch_exports/ on completion? [Y/n]
+
+📐 Resolution:
+  [1] 5K    — Native upscaled resolution (archival/master)
+  [2] 1080p — Downscaled for YouTube delivery
+  [3] Both  — Render 5K master + 1080p delivery copy
+
+🤖 Model (2 of 7 installed):
+  [1] UltraSharp — Maximum detail. ★
+  [2] Standard — Balanced speed and quality.
+
+🎚️  Encoding Quality (CRF):
+   CRF controls the trade-off between visual quality and file size.
+   Lower number = better quality, larger file.
+   Higher number = more compression, smaller file.
+
+  [1] Archive (CRF 16)  — Near-lossless. Best for long-term storage. Largest files.
+  [2] Production (CRF 18)  — Excellent quality. Recommended for most delivery work. ★
+  [3] Streaming (CRF 23)  — Good quality. Noticeably smaller files, suitable for web.
+  [4] Draft (CRF 28)  — Lower quality. Fast previews and review cuts only.
+
+📦 Packaging (3 clips detected):
+  Archive all exports to batch_exports/ on completion? [Y/n]
 ```
 
 The orchestrator then:
@@ -119,6 +138,7 @@ The orchestrator then:
 3. **Retries** the upscale phase automatically on failure (exponential backoff: 5s → 10s → 20s)
 4. **Quality gates** each render — checks bitrate and file size against configurable thresholds
 5. **Archives** all renders to `batch_exports/<date>_batch.7z` if packaging was requested
+6. **Encoding quality** is user-selectable per run (Archive / Production / Streaming / Draft), each preset maps to a CRF value passed to ffmpeg
 
 ### Outputs
 
@@ -171,6 +191,7 @@ Edit `config/config.json`:
   },
   "default_model": "upscayl-standard-4x",
   "default_scale": 4,
+  "encode_crf": 18,
   "models": {
     "upscayl-standard-4x": "Standard — Balanced speed and quality. Good default.",
     "ultrasharp-4x": "UltraSharp — Maximum detail. Best for live-action footage."
@@ -182,6 +203,8 @@ Edit `config/config.json`:
   }
 }
 ```
+
+**`encode_crf`** — default CRF value pre-selected in the encoding quality prompt. The ★ marker and Enter-key default both track this value. Must be one of the four named preset values (16, 18, 23, 28) for the default selection to be meaningful; other values fall back to Production (18).
 
 **`models`** — descriptions shown in the production profile menu. Any model on disk but not in this list gets a generic label. Missing this block falls back to the built-in descriptions.
 
@@ -197,9 +220,9 @@ All external tools (ffmpeg, ffprobe, upscayl) are mocked — no GPU or system de
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
-| `test_config_manager.py` | 13 | ProductionProfile, load_config, model discovery, configure_production_run |
+| `test_config_manager.py` | 15 | ProductionProfile, load_config, model discovery, configure_production_run, encoding quality presets |
 | `test_validator.py` | 13 | estimate_batch_requirements, check_disk_space, pre_flight_report, quality_gate |
-| `test_pipeline.py` | 16 | Full run, duplicate detection, resume, retry logic, quality gate failure, batch archive |
+| `test_pipeline.py` | 17 | Full run, duplicate detection, resume, retry logic, quality gate failure, CRF passthrough, batch archive |
 | `test_strategy.py` | 4 | Resolution selection via configure_production_run |
 | `test_quality_report.py` | 3 | quality_gate output parsing, missing bitrate, exception handling |
 | `test_init.py` | 4 | Directory creation, manifest, idempotency, hash backfill |
@@ -207,7 +230,7 @@ All external tools (ffmpeg, ffprobe, upscayl) are mocked — no GPU or system de
 | `test_verify.py` | 4 | Pass/fail for raw and upscaled frame verification |
 | `test_sift.py` | 3 | Flattening nested dirs, no-op, multiple subdirs |
 
-**Total: 68 tests, 68 passing.**
+**Total: 76 tests, 76 passing.**
 
 ## Credits
 
