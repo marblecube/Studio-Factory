@@ -3,3 +3,5 @@ legacy_scripts/
 input/
 Projects/
 tools/
+__pycache__/
+.pytest_cache/
