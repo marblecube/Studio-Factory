@@ -5,3 +5,4 @@ Projects/
 tools/
 __pycache__/
 .pytest_cache/
+batch_exports/*.7z
