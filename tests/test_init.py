@@ -16,8 +16,10 @@ def test_init_creates_directory_structure(tmp_path, monkeypatch, mock_config):
     assert project_root.exists()
     assert (project_root / "process" / "frames_raw").is_dir()
     assert (project_root / "export").is_dir()
-    assert (project_root / "logs").is_dir()
     assert (project_root / "metadata").is_dir()
+    assert not (project_root / "logs").exists(), (
+        "Per-project logs/ should NOT be created — logs live in root logs/"
+    )
 
 
 def test_init_creates_manifest(tmp_path, monkeypatch, mock_config):
@@ -70,7 +72,7 @@ def test_init_backfills_hash_on_legacy_project(tmp_path, monkeypatch, mock_confi
 
     # Pre-create a legacy project without source_hash
     project_dir = tmp_path / "Projects" / "legacy_vid"
-    for sub in ["process/frames_raw", "export", "logs", "metadata"]:
+    for sub in ["process/frames_raw", "export", "metadata"]:
         (project_dir / sub).mkdir(parents=True)
     legacy_manifest = {"name": "legacy_vid", "status": "verified"}
     (project_dir / "manifest.json").write_text(json.dumps(legacy_manifest))

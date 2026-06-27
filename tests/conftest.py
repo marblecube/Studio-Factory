@@ -64,7 +64,7 @@ def production_profile():
 def project_dir(tmp_path):
     """Creates a full project skeleton with manifest, ready for phase tests."""
     project_root = tmp_path / "test_project"
-    for sub in ["process/frames_raw", "process/frames_upscaled", "export", "logs", "metadata"]:
+    for sub in ["process/frames_raw", "process/frames_upscaled", "export", "metadata"]:
         (project_root / sub).mkdir(parents=True)
 
     manifest = {

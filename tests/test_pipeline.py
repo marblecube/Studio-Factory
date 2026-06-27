@@ -98,12 +98,18 @@ def test_skip_already_stitched(tmp_path, monkeypatch, mock_config, capsys):
     source_hash = orchestrator.hash_file(video)
 
     project_dir = tmp_path / "Projects" / "done_clip"
-    project_dir.mkdir(parents=True)
+    export_dir = project_dir / "export"
+    export_dir.mkdir(parents=True)
+
+    # Create the actual render file so the existence check passes
+    render_file = export_dir / "done_clip_5k_render.mp4"
+    render_file.write_bytes(b"fake-render")
+
     manifest = {
         "name": "done_clip",
         "status": "stitched",
         "source_hash": source_hash,
-        "outputs": {"5K": "Projects/done_clip/export/done_clip_5k_render.mp4"}
+        "outputs": {"5K": str(render_file)}
     }
     (project_dir / "manifest.json").write_text(json.dumps(manifest))
 
@@ -124,12 +130,18 @@ def test_skip_renamed_duplicate(tmp_path, monkeypatch, mock_config, capsys):
     source_hash = orchestrator.hash_file(video)
 
     project_dir = tmp_path / "Projects" / "original_name"
-    project_dir.mkdir(parents=True)
+    export_dir = project_dir / "export"
+    export_dir.mkdir(parents=True)
+
+    # Create the actual render file so the existence check passes
+    render_file = export_dir / "original_name_1080p_render.mp4"
+    render_file.write_bytes(b"fake-render")
+
     manifest = {
         "name": "original_name",
         "status": "stitched",
         "source_hash": source_hash,
-        "outputs": {"1080p": "Projects/original_name/export/original_name_1080p_render.mp4"}
+        "outputs": {"1080p": str(render_file)}
     }
     (project_dir / "manifest.json").write_text(json.dumps(manifest))
 
@@ -165,7 +177,7 @@ def test_resume_from_verified(
     source_hash = orchestrator.hash_file(video)
 
     project_dir = tmp_path / "Projects" / "resume_clip"
-    for sub in ["process/frames_raw", "process/frames_upscaled", "export", "logs", "metadata"]:
+    for sub in ["process/frames_raw", "process/frames_upscaled", "export", "metadata"]:
         (project_dir / sub).mkdir(parents=True)
 
     manifest = {
@@ -215,18 +227,25 @@ def test_legacy_output_key_support(tmp_path, monkeypatch, mock_config, capsys):
     source_hash = orchestrator.hash_file(video)
 
     project_dir = tmp_path / "Projects" / "legacy_clip"
-    project_dir.mkdir(parents=True)
+    export_dir = project_dir / "export"
+    export_dir.mkdir(parents=True)
+
+    # Create the actual render file so the existence check passes
+    render_file = export_dir / "final_render.mp4"
+    render_file.write_bytes(b"fake-legacy-render")
+
     manifest = {
         "name": "legacy_clip",
         "status": "stitched",
         "source_hash": source_hash,
-        "output": "Projects/legacy_clip/export/final_render.mp4"
+        "output": str(render_file)
     }
     (project_dir / "manifest.json").write_text(json.dumps(manifest))
 
     orchestrator.process_queue(mock_config)
     captured = capsys.readouterr()
     assert "already processed" in captured.out
+
 
 
 def test_no_videos_early_return(tmp_path, monkeypatch, mock_config, capsys):

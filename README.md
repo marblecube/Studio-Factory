@@ -133,8 +133,8 @@ python3 orchestrator.py
 ```
 
 The orchestrator then:
-1. **Fingerprints** each video (SHA-256) — skips duplicates even if renamed
-2. **Resumes** interrupted projects from the last completed phase
+1. **Fingerprints** each video (SHA-256) — skips duplicates even if renamed, and verifies output files actually exist on disk before trusting a prior result
+2. **Resumes** interrupted projects from the last completed phase — including `failed_quality`, which re-runs only the stitch + quality gate without repeating the GPU upscale
 3. **Retries** the upscale phase automatically on failure (exponential backoff: 5s → 10s → 20s)
 4. **Quality gates** each render — checks bitrate and file size against configurable thresholds
 5. **Archives** all renders to `batch_exports/<date>_batch.7z` if packaging was requested
@@ -142,12 +142,15 @@ The orchestrator then:
 
 ### Outputs
 
-Individual renders land in `Projects/<video_name>/export/`:
+**Individual job** renders land in `Projects/<video_name>/export/`:
 - `<video_name>_5k_render.mp4`
 - `<video_name>_1080p_render.mp4`
 
-Batch archive (if requested):
-- `batch_exports/2026-06-24_batch.7z`
+**Batch job** renders are copied to `batch_exports/<date>_batch/` after processing, and an archive is created:
+- `batch_exports/2026-06-27_batch/clip_a_5k_render.mp4`
+- `batch_exports/2026-06-27_batch.7z`
+
+The delivery report for batch runs shows the `batch_exports/` paths as the canonical delivery location.
 
 ## Project Structure
 
@@ -161,7 +164,8 @@ Studio-Factory/              ← Logic repo (version controlled)
 ├── tools/
 │   └── upscayl/             ← Headless upscaler binary + models
 ├── input/                   ← Drop source videos here
-├── batch_exports/           ← 7z archives of completed batch runs
+├── logs/                    ← Per-run log files (YYYY-MM-DD_HH-MM-SS_run.log)
+├── batch_exports/           ← Delivery copies + 7z archives of completed batch runs
 ├── templates/               ← Project directory templates
 └── Projects/                ← Output (one folder per video)
     └── <video_name>/
@@ -172,7 +176,6 @@ Studio-Factory/              ← Logic repo (version controlled)
         ├── export/
         │   ├── <name>_5k_render.mp4   ← 5K master (if selected)
         │   └── <name>_1080p_render.mp4 ← 1080p delivery (if selected)
-        ├── logs/
         └── metadata/
             └── audio_anchor.wav ← Locked audio stream
 ```

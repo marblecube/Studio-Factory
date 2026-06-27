@@ -92,6 +92,30 @@ def _format_bytes(byte_count):
     return f"{gb:.1f} GB"
 
 
+def _display_width(text):
+    """Returns the visual display width of a string in a terminal.
+
+    Emoji and CJK characters occupy 2 columns; most others occupy 1.
+    Uses unicodedata.east_asian_width for accurate measurement.
+    """
+    import unicodedata
+    width = 0
+    for ch in text:
+        eaw = unicodedata.east_asian_width(ch)
+        width += 2 if eaw in ('W', 'F') else 1
+    return width
+
+
+def _box_line(content, inner_width=46):
+    """Builds a fixed-width box line padded to inner_width display columns.
+
+    Compensates for double-width characters (emoji, CJK) so the right
+    border ║ always stays aligned regardless of emoji content.
+    """
+    padding = inner_width - _display_width(content)
+    return f"\u2551{content}{' ' * max(0, padding)}\u2551"
+
+
 def _estimate_duration_hours(total_frames):
     """Rough duration estimate based on typical processing speed.
 
@@ -143,25 +167,28 @@ def pre_flight_report(videos, config):
         minutes = int((est_hours - hours) * 60)
         duration_str = f"~{hours}h {minutes}m"
 
-    # Print report
-    print("\n╔══════════════════════════════════════════════╗")
-    print("║            PRE-FLIGHT REPORT                 ║")
-    print("╠══════════════════════════════════════════════╣")
-    print(f"║  📋 Clips:          {len(videos):<24}║")
-    print(f"║  🎞️  Total frames:   {total_frames:>12,}{' ' * 12}║")
-    print(f"║  💾 Est. footprint:  {_format_bytes(required_with_margin):<24}║")
-    print(f"║     (incl. 20% safety margin){' ' * 16}║")
-    print(f"║  💿 Disk free:       {_format_bytes(free_bytes):<24}║")
-    print(f"║  ⏱️  Est. duration:   {duration_str:<24}║")
+    # Print report (use _box_line so emoji don't break right-border alignment)
+    W = 46  # inner display width of the box
+    print("\n\u2554" + "\u2550" * W + "\u2557")
+    print(_box_line("          PRE-FLIGHT REPORT", W))
+    print("\u2560" + "\u2550" * W + "\u2563")
+    print(_box_line(f"  \U0001f4cb Clips:          {len(videos)}", W))
+    print(_box_line(f"  \U0001f39e\ufe0f  Total frames:  {total_frames:>13,}", W))
+    print(_box_line(f"  \U0001f4be Est. footprint: {_format_bytes(required_with_margin)}", W))
+    print(_box_line( "     (incl. 20% safety margin)", W))
+    print(_box_line(f"  \U0001f4ff Disk free:      {_format_bytes(free_bytes)}", W))
+    print(_box_line(f"  \u23f1\ufe0f  Est. duration:  {duration_str}", W))
 
     if ok:
-        print("║  Status:            ✅ GO                     ║")
+        print(_box_line("  Status:          \u2705 GO", W))
     else:
-        print("║  Status:            ❌ NO-GO                   ║")
-        print(f"║  ⚠️  Need {_format_bytes(required_with_margin)}, "
-              f"only {_format_bytes(free_bytes)} free.       ║")
+        print(_box_line("  Status:          \u274c NO-GO", W))
+        print(_box_line(
+            f"  \u26a0\ufe0f  Need {_format_bytes(required_with_margin)}, "
+            f"only {_format_bytes(free_bytes)} free.", W
+        ))
 
-    print("╚══════════════════════════════════════════════╝")
+    print("\u255a" + "\u2550" * W + "\u255d")
 
     return ok
 

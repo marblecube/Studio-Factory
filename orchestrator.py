@@ -1,5 +1,6 @@
 import json
 import hashlib
+import logging
 import subprocess
 import time
 import shutil
@@ -48,7 +49,7 @@ def hash_file(filepath, algorithm="sha256"):
 def init_project(video_path):
     """Phase 1: Initializes project structure and manifest.json."""
     project_root = Path("Projects") / video_path.stem
-    structure = ["process/frames_raw", "export", "logs", "metadata"]
+    structure = ["process/frames_raw", "export", "metadata"]
 
     for sub in structure:
         (project_root / sub).mkdir(parents=True, exist_ok=True)
@@ -608,15 +609,30 @@ def process_queue(config=None):
         existing = registry.get(video_hash)
 
         if existing and existing["status"] == "stitched":
-            skipped.append((video, existing))
+            # Verify that the output files actually exist on disk before skipping.
+            # A stale manifest (e.g. from a crashed/partial run) can claim 'stitched'
+            # even though the rendered files are missing.
             outputs = existing["outputs"]
-            project_name = existing["project"]
-            print(f"   ⏩ {video.name} — already processed (project: {project_name})")
-            if isinstance(outputs, dict):
-                for label, path in outputs.items():
-                    print(f"      ✨ {label} → {path}")
-            elif isinstance(outputs, str):
-                print(f"      ✨ render → {outputs}")
+            output_paths = list(outputs.values()) if isinstance(outputs, dict) else [outputs]
+            all_outputs_present = all(
+                output_paths and Path(p).exists() for p in output_paths if p
+            )
+
+            if all_outputs_present:
+                skipped.append((video, existing))
+                project_name = existing["project"]
+                print(f"   ⏩ {video.name} — already processed (project: {project_name})")
+                if isinstance(outputs, dict):
+                    for label, path in outputs.items():
+                        print(f"      ✨ {label} → {path}")
+                elif isinstance(outputs, str):
+                    print(f"      ✨ render → {outputs}")
+            else:
+                # Manifest says stitched but outputs are missing — treat as resumable.
+                pending.append(video)
+                resuming.append(video.name)
+                print(f"   🔄 {video.name} — resuming from 'stitched' (outputs missing on disk) "
+                      f"(project: {existing['project']})")
         elif existing:
             pending.append(video)
             resuming.append(video.name)
@@ -660,6 +676,21 @@ def process_queue(config=None):
     results = []
     completed_projects = []
 
+    # Root-level log directory — one file per run, appended per clip
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    run_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_path = logs_dir / f"{run_stamp}_run.log"
+    logging.basicConfig(
+        filename=str(log_path),
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%H:%M:%S",
+        force=True,
+    )
+    log = logging.getLogger("studio_factory")
+    log.info("Run started — %d clip(s) to process", len(pending))
+
     for i, video in enumerate(pending, 1):
         project_root = Path("Projects") / video.stem
         manifest_path = project_root / "manifest.json"
@@ -668,6 +699,7 @@ def process_queue(config=None):
         print(f"📦 Processing clip {i}/{len(pending)}: {video.name}")
         print(f"{'='*50}")
 
+        log.info("--- Clip %d/%d: %s ---", i, len(pending), video.name)
         project_root = init_project(video)
 
         # Read current status to resume where we left off
@@ -690,6 +722,11 @@ def process_queue(config=None):
             verify_upscale(project_root)
             status = "upscaled"
 
+        # failed_quality means the upscale succeeded but the render didn't pass
+        # the quality gate. Resume from the stitch phase (re-run stitch + quality gate).
+        if status == "failed_quality":
+            status = "upscaled"
+
         if status == "upscaled":
             all_passed = stitch(project_root, profile, config)
 
@@ -706,10 +743,27 @@ def process_queue(config=None):
 
             if final_manifest.get("status") == "stitched":
                 completed_projects.append(project_root)
+                log.info("%s — stitched OK. Outputs: %s", video.stem, final_manifest.get("outputs"))
+            else:
+                log.warning("%s — finished with status: %s", video.stem, final_manifest.get("status"))
 
     # Step 8: Batch packaging
     if profile.package_output and completed_projects:
-        package_delivery(completed_projects)
+        batch_name = f"{datetime.now().strftime('%Y-%m-%d')}_batch"
+        batch_dir = Path("batch_exports") / batch_name
+        package_delivery(completed_projects, batch_name=batch_name)
+
+        # For batch runs, update result output paths to point to batch_exports/
+        # so the delivery report reflects the canonical delivery location,
+        # not the intermediate Projects/*/export/ working copies.
+        if profile.batch_mode:
+            for r in results:
+                if isinstance(r.get("outputs"), dict):
+                    r["outputs"] = {
+                        label: str(batch_dir / Path(path).name)
+                        for label, path in r["outputs"].items()
+                        if path
+                    }
 
     # Step 9: Delivery report
     elapsed = time.time() - start_time
